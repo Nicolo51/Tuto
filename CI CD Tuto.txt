@@ -1,0 +1,226 @@
+- installer une vm ubuntu avec 8go de ram et 30 go d'espace disque (histoire d'être large)
+
+- Mettre a jour l'index apt et ubuntu
+    $ sudo apt-get update
+    $ sudo apt-get upgrade
+
+- Installer les paquets permettant à APT d'utiliser un serveur HTTPS de dépôt 
+    $ sudo apt-get install \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        software-properties-common
+
+- Ajouter la clé GPG du site de Docker
+    $ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+
+- Pointer vers le dépôt de la version "stable" de Dcoker CE : 
+    $ sudo add-apt-repository \
+       "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+       $(lsb_release -cs) \
+       stable"
+
+- Mettre a jour l'index apt 
+    $ sudo apt-get update
+
+- Installer Docker CE 
+    $ sudo apt-get install docker-ce
+
+- Verifier que docker est bien installé
+    $ sudo docker --version 
+
+- Créer un container GitLab 
+    $ export GITLAB_HOME=/srv
+    $ sudo docker run --detach \
+        --hostname gitlab \
+        --publish 443:443 --publish 80:80 --publish 22:22 \
+        --name gitlab \
+        --restart always \
+        --volume $GITLAB_HOME/gitlab/config:/etc/gitlab:Z \
+        --volume $GITLAB_HOME/gitlab/logs:/var/log/gitlab:Z \
+        --volume $GITLAB_HOME/gitlab/data:/var/opt/gitlab:Z \
+        gitlab/gitlab-ce:latest
+    note : Vous pouvez changer le les ports selon le besoin/envie 
+
+- Se rendre sur http://localhost/ et créer un repository
+
+- Créer un container Gitlab-runner
+    $ sudo docker run -d \
+        --name gitlab-runner \
+        --restart always \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v /data/gitlab-runner:/etc/gitlab-runner \
+        gitlab/gitlab-runner:latest
+
+- Créer un reseau docker 
+    -Lister les reseaux docker 
+        $ sudo docker network ls 
+    $ sudo docker network create gitlab-network
+
+- Connecter les container gitlab et gitlab-runner
+    $ sudo docker network connect gitlab-network gitlab-runner
+    $ sudo docker network connect gitlab-network gitlab
+
+- Se rendre sur Gitlab dans Settings -> CI / CD -> Runners -> Set up a specific Runner manually et copier le toker
+
+- Register le runner 
+    $ sudo docker exec -it gitlab-runner gitlab-runner register
+        -> http://gitlab/ 
+        -> _jeus9yddg4iVU1w1S1Z (example of token)
+        -> <description of the runner>
+        -> <tag>
+        -> docker
+        -> httpd:2.4 (or what ever you want)
+
+- Check si le runner est bien la sur Gitlab dans Settings -> CI / CD -> Runners -> Set up a specific Runner manually et copier le toker 
+
+- Modifier le fichier config.toml 
+    $ sudo nano /data/gitlab-runner/config.toml
+        - Ajouter dans [[runners]] 
+        _______________________________
+         clone_url = "http://gitlab/" 
+        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+       - Editer Volumes dans [runners.docker]
+       _________________________________________________________________
+       volumes = ["/var/run/docker.sock:/var/run/docker.sock", "/cache"]
+       ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+       - Ajouter dans [runners.docker]
+       _______________________________ 
+       network_mode = "gitlab-network" 
+       ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+       - Sauvegarder et quitter 
+
+- Restart gitlab-runner container 
+    $ sudo docker restart gitlab-runner
+
+- Install git 
+    $ sudo apt-get install git
+
+- Verifier que git est bien installé
+    $ git --version 
+
+- Set up sa config 
+    $ git config --global user.name "Nom Prenom"
+    $ git config --global user.email "exemple@exemple.com"
+
+- Cloner le repos 
+    $ git clone http://localhost/Nicolas/helloworld.git
+
+- Créer un fichier .gitlab-ci.yml dans le repository
+    $ cd helloworld
+    $ touch .gitlab-ci.yml
+
+- Ecrire ce script dans le .gitlab-ci.yml avec nano ou l'éditeur de votre choix
+_________________________________________________________________________________________
+stages:
+ - build
+
+build_img:
+ stage: build
+ image: docker:stable-dind
+ services:
+  - docker:dind
+ script: 
+  - docker ps
+  - docker build -t helloworld:latest .
+  - docker rm -f helloworld || true 
+  - docker run -d --name helloworld --network gitlab-network -p 8080:80 helloworld:latest
+‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+   ʌ                                                                     ʌ
+  /!\ le port du container ne peut pas être le même que celui de gitlab /!\
+  ‾‾‾                                                                   ‾‾‾
+
+- Créer un index.html (toujours dans repo cloné)
+    $ touch index.html
+    $ echo "<h1> Hello World </h1>" > index.html
+
+Créer un Dockerfile (toujours dans repo cloné)
+    $ touch Dockerfile
+    $ echo "FROM httpd:2.4 
+        COPY ./index.html /usr/local/apache2/htdocs/" > Dockerfile
+
+- Push sur le gitlab
+    $ git add .
+    $ git commit -m "magie"
+    $ git push origin master 
+        -> Entez ID 
+        -> Entrez mot de passe
+    
+- Installer node et npm 
+    $ sudo apt-get install nodejs npm
+
+- Initialiser npm (toujours dans repo cloné)
+    $ npm init
+        -> suivre les instructions 
+    $ npm init  
+
+- Installer cypress 
+    $ npm install cypress --save-dev
+
+- Tester l'installation de cypress (toujours dans repo cloné)
+    $ ./node_modules/cypress/bin/cypress open
+
+- Céer son test 
+     _                                              
+    |i| Vous pouvez supprimer le dossier example dans ./cypress/integration/
+     ‾
+    $ touch ./cypress/integration/sample_spec.js
+    
+- Ecrire ce script dans le ./cypress/integration/sample_spec.js avec nano ou l'éditeur de votre choix  
+_________________________________________________________________________________________
+describe('Hello World Test', () => {
+    it('Test if the web page contains Hello World', () => {
+        cy.visit('http://helloworld:80')
+        cy.get('h1').contains('Hello World')
+    })
+  }
+)
+‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+     _                                              
+    |i| Même si le port 80 du container est bind sur le 8080 sur l'host les containers se voient sur le port 80 entre eux 
+     ‾
+
+- Modifier .gitlab-ci.yml tel qu'il ressemble a ceci 
+_________________________________________________________________________________________
+stages:
+ - build
+ - test
+
+build_img:
+ stage: build
+ image: docker:stable-dind
+ services:
+  - docker:dind
+ script: 
+  - docker ps
+  - docker build -t helloworld:latest .
+  - docker rm -f helloworld || true 
+  - docker run -d --name helloworld --network gitlab-network -p 8080:80 helloworld:latest
+
+test_cypress: 
+ stage: test
+ image: cypress/base:10
+ script: 
+  - npm i
+  - ./node_modules/.bin/cypress run
+‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+     _                                              
+    |i| Un stage a juste été rajouté
+     ‾
+
+
+- Ajouter un .gitignore et y ajouter node_modules/
+    $ touch .gitignore
+    $ echo "node_modules/*" > .gitignore 
+
+- Push sur le gitlab
+    $ git add .
+    $ git commit -m "magie"
+    $ git push origin master 
+        -> Entez ID 
+        -> Entrez mot de passe
+
+- Observer !
